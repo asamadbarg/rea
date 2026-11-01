@@ -110,3 +110,56 @@ it("keeps a read stream whose flags option is invalid", () => {
     { kind: "acquire", method: "createReadStream" },
   ]);
 });
+
+/**
+ * Node validates the `mode` in slot 2 before touching the filesystem. A numeric
+ * mode must be an unsigned 32-bit integer and a string mode must be a canonical
+ * octal digit string; anything else throws synchronously and no descriptor
+ * exists. `null`, `undefined` and `void <expr>` default the mode, and a computed
+ * value may still be valid, so those are kept.
+ *
+ *   fs.openSync(p, "r", -1)        -> THREW ERR_OUT_OF_RANGE
+ *   fs.openSync(p, "r", 1.5)       -> THREW ERR_OUT_OF_RANGE
+ *   fs.openSync(p, "r", true)      -> THREW ERR_INVALID_ARG_TYPE
+ *   fs.openSync(p, "r", "8")       -> THREW ERR_INVALID_ARG_VALUE
+ *   fs.openSync(p, "r", "")        -> THREW ERR_INVALID_ARG_VALUE
+ *   fs.openSync(p, "r", 0o644)     -> ok
+ *   fs.openSync(p, "r", "0644")    -> ok
+ *   fs.openSync(p, "r", null)      -> ok
+ */
+it.each([
+  ["a negative mode", `openSync("x", "r", -1)`],
+  ["a fractional mode", `openSync("x", "r", 1.5)`],
+  ["a NaN mode", `openSync("x", "r", NaN)`],
+  ["an Infinity mode", `openSync("x", "r", Infinity)`],
+  ["an overflowing mode", `openSync("x", "r", 1e21)`],
+  ["a boolean mode", `openSync("x", "r", true)`],
+  ["a BigInt mode", `openSync("x", "r", 0n)`],
+  ["an object mode", `openSync("x", "r", {})`],
+  ["an array mode", `openSync("x", "r", [])`],
+  ["a non-octal mode string", `openSync("x", "r", "8")`],
+  ["an empty mode string", `openSync("x", "r", "")`],
+  ["a prefixed mode string", `openSync("x", "r", "0o644")`],
+  ["a padded mode string", `openSync("x", "r", " 644 ")`],
+  ["a rejected fs/promises mode", `openPromise("x", "r", -1)`],
+] as const)("emits no fs acquisition for %s", (_name, call) => {
+  expect(acquisitionsFor(call)).toEqual([]);
+});
+
+it.each([
+  ["a zero mode", `openSync("x", "r", 0)`, "openSync"],
+  ["an octal numeric mode", `openSync("x", "r", 0o644)`, "openSync"],
+  ["the largest usable mode", `openSync("x", "r", 2147483647)`, "openSync"],
+  ["a negated zero mode", `openSync("x", "r", -0)`, "openSync"],
+  ["an octal mode string", `openSync("x", "r", "644")`, "openSync"],
+  ["a zero-padded mode string", `openSync("x", "r", "0644")`, "openSync"],
+  ["a null mode", `openSync("x", "r", null)`, "openSync"],
+  ["an undefined mode", `openSync("x", "r", undefined)`, "openSync"],
+  ["a void mode", `openSync("x", "r", void 0)`, "openSync"],
+  ["an omitted mode", `openSync("x", "r")`, "openSync"],
+  ["a computed mode", `openSync("x", "r", mode)`, "openSync"],
+] as const)("keeps the fs acquisition for %s", (_name, call, method) => {
+  expect(acquisitionsFor(call)).toEqual([
+    { kind: "acquire", method: method ?? "openSync" },
+  ]);
+});

@@ -145,6 +145,48 @@ const staticFlagBits = (value: t.Node): number | null | undefined => {
   return undefined;
 };
 
+/** `fs.open`, `fs.openSync` and `fs/promises.open` take the mode in slot 2. */
+const rejectsOpenModeLiteral = (
+  node: t.CallExpression | t.OptionalCallExpression,
+  context: DataEffectTraversalContext,
+): boolean => {
+  // A spread before the mode slot shifts the runtime position.
+  if (
+    t.isSpreadElement(node.arguments[0]) ||
+    t.isSpreadElement(node.arguments[1])
+  )
+    return false;
+  const mode = node.arguments[2];
+  if (mode === undefined || t.isSpreadElement(mode)) return false;
+  const value = unwrapJavaScriptExpression(mode).node;
+  // `null`, `undefined` and `void <expr>` all default the mode.
+  if (t.isNullLiteral(value)) return false;
+  // Node accepts only a canonical octal digit string for a string mode.
+  if (t.isStringLiteral(value)) return !/^[0-7]+$/u.test(value.value);
+  // A numeric mode is validated as an unsigned 32-bit integer.
+  const bits = staticFlagBits(value);
+  if (bits !== undefined) {
+    if (bits === null) return false;
+    // Values in `[2^31, 2^32-1]` abort the process rather than throwing, so
+    // they stay undecided instead of being claimed as a synchronous throw.
+    return !Number.isInteger(bits) || bits < 0 || bits > 4_294_967_295;
+  }
+  // `NaN` and `Infinity` are unshadowed globals, and neither is a mode.
+  if (
+    t.isIdentifier(value) &&
+    (value.name === "NaN" || value.name === "Infinity") &&
+    isUnmodifiedGlobalReference(value, context.state, value.name)
+  )
+    return true;
+  // BigInt, boolean, object and array literals all fail Node's mode check.
+  return (
+    t.isBigIntLiteral(value) ||
+    t.isBooleanLiteral(value) ||
+    t.isObjectExpression(value) ||
+    t.isArrayExpression(value)
+  );
+};
+
 /** `fs.open`, `fs.openSync` and `fs/promises.open` take the flag in slot 1. */
 const openFlagInFirstArgument = (reference: AcquisitionReference): boolean =>
   reference.method === "open" || reference.method === "openSync"
@@ -160,11 +202,10 @@ const collectAcquisitions = (
     if (!t.isCallExpression(node) && !t.isOptionalCallExpression(node)) return;
     const reference = acquisitionMethod(node.callee, context.state);
     if (reference === null) return;
-    if (
-      openFlagInFirstArgument(reference) &&
-      rejectsOpenFlagLiteral(node, context)
-    )
-      return;
+    if (openFlagInFirstArgument(reference)) {
+      if (rejectsOpenFlagLiteral(node, context)) return;
+      if (rejectsOpenModeLiteral(node, context)) return;
+    }
     output.push({
       node,
       specifier: reference.specifier,
