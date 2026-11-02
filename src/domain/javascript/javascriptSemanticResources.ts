@@ -118,12 +118,15 @@ const rejectsOpenFlagLiteral = (
     isUnmodifiedGlobalReference(value, context.state, value.name)
   )
     return true;
-  // BigInt, boolean, object and array literals all fail Node's flag check.
+  // BigInt, boolean, object and array literals all fail Node's flag check. A
+  // unary operator over a BigInt literal is a BigInt too.
   return (
     t.isBigIntLiteral(value) ||
     t.isBooleanLiteral(value) ||
     t.isObjectExpression(value) ||
-    t.isArrayExpression(value)
+    t.isArrayExpression(value) ||
+    (t.isUnaryExpression(value) &&
+      t.isBigIntLiteral(unwrapJavaScriptExpression(value.argument).node))
   );
 };
 
@@ -178,10 +181,11 @@ const rejectsOpenModeLiteral = (
       : undefined;
   if (octal !== undefined && octal !== null) {
     if (!/^[0-7]+$/u.test(octal)) return true;
-    // An octal string above the uint32 maximum throws ERR_OUT_OF_RANGE. Eleven
-    // octal digits cover the whole uint32 range, so a longer string cannot fit and
-    // an eleven-digit one is compared exactly.
-    return octal.length > 11 || Number.parseInt(octal, 8) > 4_294_967_295;
+    // Leading zeros pad the text without changing the value, so the bound reads the
+    // significant digits. Eleven octal digits cover the whole uint32 range, so a
+    // longer significant run cannot fit and an eleven-digit one is exact.
+    const digits = octal.replace(/^0+/u, "");
+    return digits.length > 11 || Number.parseInt(digits, 8) > 4_294_967_295;
   }
   if (t.isStringLiteral(value)) return !/^[0-7]+$/u.test(value.value);
   // A numeric mode is validated as an unsigned 32-bit integer.
@@ -199,12 +203,16 @@ const rejectsOpenModeLiteral = (
     isUnmodifiedGlobalReference(value, context.state, value.name)
   )
     return true;
-  // BigInt, boolean, object and array literals all fail Node's mode check.
+  // BigInt, boolean, object and array literals all fail Node's mode check. A
+  // unary operator over a BigInt literal is a BigInt too, and the range helpers
+  // above only price numeric operands.
   return (
     t.isBigIntLiteral(value) ||
     t.isBooleanLiteral(value) ||
     t.isObjectExpression(value) ||
-    t.isArrayExpression(value)
+    t.isArrayExpression(value) ||
+    (t.isUnaryExpression(value) &&
+      t.isBigIntLiteral(unwrapJavaScriptExpression(value.argument).node))
   );
 };
 

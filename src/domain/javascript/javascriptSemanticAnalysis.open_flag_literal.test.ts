@@ -224,3 +224,46 @@ it.each([
 ] as const)("keeps the fs acquisition for %s", (_name, call, method) => {
   expect(acquisitionsFor(call)).toEqual([{ kind: "acquire", method }]);
 });
+
+/**
+ * Two further review findings.
+ *
+ * Leading zeros pad an octal mode without changing its value, so the range bound
+ * must read the significant digits:
+ *
+ *   fs.openSync(p, "r", "00000000000000644") -> ok  (420)
+ *   fs.openSync(p, "r", "0000040000000000")  -> THREW ERR_OUT_OF_RANGE (2^32)
+ *
+ * A unary operator over a BigInt literal is still a BigInt, which Node rejects in
+ * both slots:
+ *
+ *   fs.openSync(p, -1n)      -> THREW ERR_INVALID_ARG_TYPE
+ *   fs.openSync(p, "r", -1n) -> THREW ERR_INVALID_ARG_TYPE
+ */
+it.each([
+  [
+    "a zero-padded octal mode above uint32",
+    `openSync("x", "r", "0000040000000000")`,
+  ],
+  ["a negated BigInt flag", `openSync("x", -1n)`],
+  ["a unary-plus BigInt flag", `openSync("x", +1n)`],
+  ["a negated BigInt mode", `openSync("x", "r", -1n)`],
+  ["a unary-plus BigInt mode", `openSync("x", "r", +1n)`],
+] as const)("emits no fs acquisition for %s", (_name, call) => {
+  expect(acquisitionsFor(call)).toEqual([]);
+});
+
+it.each([
+  [
+    "a zero-padded octal mode",
+    `openSync("x", "r", "00000000000000644")`,
+    "openSync",
+  ],
+  [
+    "a shorter zero-padded octal mode",
+    `openSync("x", "r", "00000000644")`,
+    "openSync",
+  ],
+] as const)("keeps the fs acquisition for %s", (_name, call, method) => {
+  expect(acquisitionsFor(call)).toEqual([{ kind: "acquire", method }]);
+});
