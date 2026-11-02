@@ -94,6 +94,14 @@ const rejectsOpenFlagLiteral = (
   if (flag === undefined || t.isSpreadElement(flag)) return false;
   const value = unwrapJavaScriptExpression(flag).node;
   if (t.isStringLiteral(value)) return !FS_OPEN_FLAGS.has(value.value);
+  // A no-expression template literal is exactly readable, so it is the same
+  // flag string Node would receive.
+  if (t.isTemplateLiteral(value) && value.expressions.length === 0) {
+    const cooked = value.quasis[0]?.value.cooked;
+    return cooked === undefined || cooked === null
+      ? false
+      : !FS_OPEN_FLAGS.has(cooked);
+  }
   // A non-integer or out-of-int32 value is not a usable bitmask. The sign alone
   // does not decide: Node accepts some signed bitmasks such as `-2147483648` and
   // rejects others such as `-1`, so an in-range negative is left undecided.
@@ -161,7 +169,20 @@ const rejectsOpenModeLiteral = (
   const value = unwrapJavaScriptExpression(mode).node;
   // `null`, `undefined` and `void <expr>` all default the mode.
   if (t.isNullLiteral(value)) return false;
-  // Node accepts only a canonical octal digit string for a string mode.
+  // A no-expression template literal is exactly readable, so it is the same
+  // string Node would receive.
+  const octal = t.isStringLiteral(value)
+    ? value.value
+    : t.isTemplateLiteral(value) && value.expressions.length === 0
+      ? value.quasis[0]?.value.cooked
+      : undefined;
+  if (octal !== undefined && octal !== null) {
+    if (!/^[0-7]+$/u.test(octal)) return true;
+    // An octal string above the uint32 maximum throws ERR_OUT_OF_RANGE. Eleven
+    // octal digits cover the whole uint32 range, so a longer string cannot fit and
+    // an eleven-digit one is compared exactly.
+    return octal.length > 11 || Number.parseInt(octal, 8) > 4_294_967_295;
+  }
   if (t.isStringLiteral(value)) return !/^[0-7]+$/u.test(value.value);
   // A numeric mode is validated as an unsigned 32-bit integer.
   const bits = staticFlagBits(value);

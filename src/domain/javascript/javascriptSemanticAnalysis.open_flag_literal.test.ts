@@ -163,3 +163,64 @@ it.each([
     { kind: "acquire", method: method ?? "openSync" },
   ]);
 });
+
+/**
+ * Review findings on the mode guard.
+ *
+ * A no-expression template literal is exactly readable, so it is the same string
+ * Node receives:
+ *
+ *   fs.openSync(p, `bad`)        -> THREW ERR_INVALID_ARG_VALUE
+ *   fs.openSync(p, `r`)          -> ok
+ *   fs.openSync(p, "r", `644`)   -> ok
+ *   fs.openSync(p, "r", `8`)     -> THREW ERR_INVALID_ARG_VALUE
+ *
+ * An octal mode string above the uint32 maximum throws ERR_OUT_OF_RANGE, while the
+ * maximum itself belongs to the range that aborts the process and so stays
+ * undecided:
+ *
+ *   fs.openSync(p, "r", "37777777777")  -> 4294967295, abort, kept
+ *   fs.openSync(p, "r", "40000000000")  -> 4294967296, THREW ERR_OUT_OF_RANGE
+ *   fs.openSync(p, "r", "0644")         -> ok
+ */
+it.each([
+  ["a rejected template flag", `openSync("x", ` + "`bad`" + `)`],
+  ["a rejected template mode", `openSync("x", "r", ` + "`8`" + `)`],
+  ["an octal mode above uint32", `openSync("x", "r", "40000000000")`],
+  ["an octal mode far above uint32", `openSync("x", "r", "777777777777")`],
+  ["a mode above uint32", `openSync("x", "r", 4294967296)`],
+] as const)("emits no fs acquisition for %s", (_name, call) => {
+  expect(acquisitionsFor(call)).toEqual([]);
+});
+
+it.each([
+  ["an accepted template flag", `openSync("x", ` + "`r`" + `)`, "openSync"],
+  [
+    "an interpolated template flag",
+    `openSync("x", ` + "`${flag}`" + `)`,
+    "openSync",
+  ],
+  [
+    "an accepted template mode",
+    `openSync("x", "r", ` + "`644`" + `)`,
+    "openSync",
+  ],
+  [
+    "an interpolated template mode",
+    `openSync("x", "r", ` + "`${mode}`" + `)`,
+    "openSync",
+  ],
+  ["the uint32 mode boundary", `openSync("x", "r", 2147483647)`, "openSync"],
+  [
+    "the process-abort mode boundary",
+    `openSync("x", "r", 2147483648)`,
+    "openSync",
+  ],
+  [
+    "the uint32 octal boundary",
+    `openSync("x", "r", "37777777777")`,
+    "openSync",
+  ],
+] as const)("keeps the fs acquisition for %s", (_name, call, method) => {
+  expect(acquisitionsFor(call)).toEqual([{ kind: "acquire", method }]);
+});
