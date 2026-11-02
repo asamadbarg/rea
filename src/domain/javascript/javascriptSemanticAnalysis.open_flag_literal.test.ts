@@ -298,3 +298,27 @@ it("keeps the fs acquisition for a shadowed NaN flag", () => {
     { kind: "acquire", method: "openSync" },
   ]);
 });
+
+/**
+ * Review finding: a unary operator over an exact non-numeric primitive is coerced
+ * by JavaScript, so the result is decidable rather than unknown:
+ *
+ *   fs.openSync(p, "r", -true)   -> mode -1, THREW ERR_OUT_OF_RANGE
+ *   fs.openSync(p, "r", +"bad")  -> mode NaN, THREW ERR_OUT_OF_RANGE
+ *   fs.openSync(p, +"bad")       -> flag NaN, THREW ERR_INVALID_ARG_VALUE
+ */
+it.each([
+  ["a negated boolean mode", `openSync("x", "r", -true)`],
+  ["a unary-plus bad string mode", `openSync("x", "r", +"bad")`],
+  ["a bitwise-not null mode", `openSync("x", "r", ~null)`],
+  ["a negated octal-looking string mode", `openSync("x", "r", -"644")`],
+  ["a unary-plus bad string flag", `openSync("x", +"bad")`],
+] as const)("emits no fs acquisition for %s", (_name, call) => {
+  expect(acquisitionsFor(call)).toEqual([]);
+});
+
+it("keeps the fs acquisition for a coerced valid flag", () => {
+  expect(acquisitionsFor(`openSync("x", ~-1)`)).toEqual([
+    { kind: "acquire", method: "openSync" },
+  ]);
+});

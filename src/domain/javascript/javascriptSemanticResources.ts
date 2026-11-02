@@ -146,10 +146,29 @@ const staticFlagBits = (value: t.Node): number | null | undefined => {
   )
     return Number.NaN;
   const operand = unwrapJavaScriptExpression(value.argument).node;
-  if (!t.isNumericLiteral(operand)) return undefined;
-  if (value.operator === "-") return -operand.value;
-  if (value.operator === "+") return operand.value;
-  if (value.operator === "~") return ~operand.value;
+  const number = t.isNumericLiteral(operand)
+    ? operand.value
+    : primitiveToNumber(operand);
+  if (number === undefined) return undefined;
+  if (value.operator === "-") return -number;
+  if (value.operator === "+") return number;
+  if (value.operator === "~") return ~number;
+  return undefined;
+};
+
+/**
+ * The number JavaScript's unary coercion produces for an exactly readable
+ * non-numeric primitive, or `undefined` when the operand is not one. `-true` is
+ * `-1` and `+"bad"` is `NaN`, so neither is a socket port or an fs flag.
+ */
+const primitiveToNumber = (value: t.Node): number | undefined => {
+  if (t.isStringLiteral(value)) return Number(value.value);
+  if (t.isBooleanLiteral(value)) return Number(value.value);
+  if (t.isNullLiteral(value)) return 0;
+  if (t.isTemplateLiteral(value) && value.expressions.length === 0) {
+    const cooked = value.quasis[0]?.value.cooked;
+    return cooked === undefined || cooked === null ? undefined : Number(cooked);
+  }
   return undefined;
 };
 
