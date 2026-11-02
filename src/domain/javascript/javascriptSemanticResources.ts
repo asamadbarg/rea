@@ -111,18 +111,15 @@ const rejectsOpenFlagLiteral = (
       bits !== null &&
       (!Number.isInteger(bits) || bits > 2_147_483_647 || bits < -2_147_483_648)
     );
-  // `NaN` and `Infinity` are unshadowed globals, and neither is a bitmask.
-  if (
-    t.isIdentifier(value) &&
-    (value.name === "NaN" || value.name === "Infinity") &&
-    isUnmodifiedGlobalReference(value, context.state, value.name)
-  )
-    return true;
+  // `NaN` and `Infinity` are unshadowed globals, and neither is a bitmask; a unary
+  // operator over one is the same non-finite number.
+  if (isNonFiniteNumber(value, context)) return true;
   // BigInt, boolean, object and array literals all fail Node's flag check. A
   // unary operator over a BigInt literal is a BigInt too.
   return (
     t.isBigIntLiteral(value) ||
     t.isBooleanLiteral(value) ||
+    t.isRegExpLiteral(value) ||
     t.isObjectExpression(value) ||
     t.isArrayExpression(value) ||
     (t.isUnaryExpression(value) &&
@@ -154,6 +151,27 @@ const staticFlagBits = (value: t.Node): number | null | undefined => {
   if (value.operator === "+") return operand.value;
   if (value.operator === "~") return ~operand.value;
   return undefined;
+};
+
+/**
+ * Whether an exactly readable expression is a non-finite number: an unshadowed
+ * `NaN` or `Infinity`, or a unary operator applied to one. `void` is excluded
+ * because it yields `undefined`, which both slots accept as the default.
+ */
+const isNonFiniteNumber = (
+  value: t.Node,
+  context: DataEffectTraversalContext,
+): boolean => {
+  const unshadowed = (node: t.Node): boolean =>
+    t.isIdentifier(node) &&
+    (node.name === "NaN" || node.name === "Infinity") &&
+    isUnmodifiedGlobalReference(node, context.state, node.name);
+  if (unshadowed(value)) return true;
+  return (
+    t.isUnaryExpression(value) &&
+    value.operator !== "void" &&
+    unshadowed(unwrapJavaScriptExpression(value.argument).node)
+  );
 };
 
 /** `fs.open`, `fs.openSync` and `fs/promises.open` take the mode in slot 2. */
@@ -196,19 +214,16 @@ const rejectsOpenModeLiteral = (
     // they stay undecided instead of being claimed as a synchronous throw.
     return !Number.isInteger(bits) || bits < 0 || bits > 4_294_967_295;
   }
-  // `NaN` and `Infinity` are unshadowed globals, and neither is a mode.
-  if (
-    t.isIdentifier(value) &&
-    (value.name === "NaN" || value.name === "Infinity") &&
-    isUnmodifiedGlobalReference(value, context.state, value.name)
-  )
-    return true;
+  // `NaN` and `Infinity` are unshadowed globals, and neither is a mode; a unary
+  // operator over one is the same non-finite number.
+  if (isNonFiniteNumber(value, context)) return true;
   // BigInt, boolean, object and array literals all fail Node's mode check. A
   // unary operator over a BigInt literal is a BigInt too, and the range helpers
   // above only price numeric operands.
   return (
     t.isBigIntLiteral(value) ||
     t.isBooleanLiteral(value) ||
+    t.isRegExpLiteral(value) ||
     t.isObjectExpression(value) ||
     t.isArrayExpression(value) ||
     (t.isUnaryExpression(value) &&

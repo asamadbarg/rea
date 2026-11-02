@@ -267,3 +267,34 @@ it.each([
 ] as const)("keeps the fs acquisition for %s", (_name, call, method) => {
   expect(acquisitionsFor(call)).toEqual([{ kind: "acquire", method }]);
 });
+
+/**
+ * Two review findings.
+ *
+ * A regex literal is an object, which Node rejects in both slots, and a unary
+ * operator applied to an unshadowed `NaN` or `Infinity` is the same non-finite
+ * number the bare global is:
+ *
+ *   fs.openSync(p, /r/)          -> THREW ERR_INVALID_ARG_TYPE
+ *   fs.openSync(p, -NaN)         -> THREW ERR_OUT_OF_RANGE
+ *   fs.openSync(p, "r", -Infinity) -> THREW ERR_OUT_OF_RANGE
+ *   --- accepted ---
+ *   fs.openSync(p, void 0)       -> ok
+ *   fs.openSync(p, -0)           -> ok
+ */
+it.each([
+  ["a regex flag", `openSync("x", /r/)`],
+  ["a regex mode", `openSync("x", "r", /644/)`],
+  ["a negated NaN flag", `openSync("x", -NaN)`],
+  ["a unary-plus Infinity flag", `openSync("x", +Infinity)`],
+  ["a bitwise-not NaN flag", `openSync("x", ~NaN)`],
+  ["a negated Infinity mode", `openSync("x", "r", -Infinity)`],
+] as const)("emits no fs acquisition for %s", (_name, call) => {
+  expect(acquisitionsFor(call)).toEqual([]);
+});
+
+it("keeps the fs acquisition for a shadowed NaN flag", () => {
+  expect(acquisitionsFor(`const NaN = 0o644; openSync("x", NaN)`)).toEqual([
+    { kind: "acquire", method: "openSync" },
+  ]);
+});
