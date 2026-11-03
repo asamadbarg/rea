@@ -119,17 +119,23 @@ export interface JavaScriptSemanticScopeState {
 /** One source owns sites and the minimal scope tree reaching them; O(AST) storage. */
 export interface JavaScriptOpaqueScopeEffects {
   /** Cheap source evidence collected with declarations, before alias queries. */
-  mayReferenceGlobalEval: boolean;
+  mayReferenceGlobalCode: boolean;
   readonly sites: WeakSet<t.Node>;
   readonly sloppySites: WeakSet<t.Node>;
   readonly byScope: Map<string, t.CallExpression[]>;
   readonly children: Map<string, Set<string>>;
-  readonly globalSites: (t.CallExpression | t.OptionalCallExpression)[];
+  readonly globalSites: (
+    | t.CallExpression
+    | t.OptionalCallExpression
+    | t.NewExpression
+  )[];
 }
 
 /** Shared state for semantic collection and evaluation. */
 export interface JavaScriptSemanticAnalysisState {
   arrayIterationUnknown: boolean;
+  /** Receiver isolation requires the completed member-effect inventory. */
+  memberMutationFactsComplete: boolean;
   readonly program: t.Program;
   readonly opaqueEffects: JavaScriptOpaqueScopeEffects;
   /** Effective loader for static imports in this source artifact. */

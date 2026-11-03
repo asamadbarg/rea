@@ -228,6 +228,7 @@ function* indexSemanticMemberMutationFactsSteps(
     (site, reference, path) =>
       referenceEffectsMayHaveChanged(state, site, reference, path),
   );
+  state.memberMutationFactsComplete = true;
   indexedMemberMutationStates.add(state);
   invalidateSemanticRequireDelegateWrites(state);
 }
@@ -1041,9 +1042,10 @@ const createState = (
   };
   return {
     arrayIterationUnknown: false,
+    memberMutationFactsComplete: false,
     program,
     opaqueEffects: {
-      mayReferenceGlobalEval: false,
+      mayReferenceGlobalCode: false,
       sites: new WeakSet(),
       sloppySites: new WeakSet(),
       byScope: new Map(),
@@ -1081,8 +1083,9 @@ const createState = (
   };
 };
 
-const globalEvalRoots = new Set([
+const globalCodeRoots = new Set([
   "eval",
+  "Function",
   "globalThis",
   "global",
   "window",
@@ -1213,10 +1216,13 @@ function* collectDefinitionsSteps(
       bindInnerDeclaration(node, parent, scope, state);
       if (t.isThrowStatement(node))
         thrownValues.push({ node, ancestors: readAncestors() });
-      // Every supported global eval origin starts with one of these decoded
+      // Every supported global-code origin starts with one of these decoded
       // identifiers, including computed properties and destructured aliases.
-      if (t.isIdentifier(node) && globalEvalRoots.has(node.name))
-        state.opaqueEffects.mayReferenceGlobalEval = true;
+      if (
+        t.isThisExpression(node) ||
+        (t.isIdentifier(node) && globalCodeRoots.has(node.name))
+      )
+        state.opaqueEffects.mayReferenceGlobalCode = true;
       if (
         t.isCallExpression(node) &&
         t.isIdentifier(unwrapJavaScriptExpression(node.callee).node, {
