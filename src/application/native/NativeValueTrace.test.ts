@@ -1327,3 +1327,137 @@ describe("native value traversal limits and policies", () => {
     expect(limited.analyzed).toEqual(["0x1000"]);
   });
 });
+
+describe("native value trace thunk targets", () => {
+  const thunkDossier = (
+    thunkTarget: string,
+    operations: ReturnType<typeof node>[],
+  ) => {
+    const dossier = functionDossierSchema.parse(
+      nativeFlowDossier(functionDossierSchema.parse(ghidraFunctionDossier()), {
+        address: "0xc000",
+        name: "thunk",
+        operations,
+        parameters: [],
+      }),
+    );
+    return jsonValueSchema.parse({
+      ...dossier,
+      procedure: {
+        ...dossier.procedure,
+        classification: {
+          external: false,
+          thunk: true,
+          thunk_target: thunkTarget,
+          provenance: "ghidra-function-manager",
+        },
+      },
+    });
+  };
+  const thunkPort = (dossier: ReturnType<typeof jsonValueSchema.parse>) => {
+    const attempted: unknown[] = [];
+    const port: AnalysisOperationPort = {
+      execute: async (operation, parameters) => {
+        attempted.push([operation, parameters]);
+        if (operation !== "analyze_function")
+          throw new Error(`Unexpected native trace operation: ${operation}`);
+        return ok(createAnalysisExecution(dossier, provider, { subject }));
+      },
+    };
+    return { port, attempted };
+  };
+  const externalTargetUnknown = {
+    procedure: "0xc000",
+    address: null,
+    reason:
+      "Thunk target EXTERNAL:0x1 is not represented in this thunk's value-flow model and was not traced",
+  };
+
+  it("reports an external import target that the synthetic thunk model never reaches", async () => {
+    const { port, attempted } = thunkPort(
+      thunkDossier("EXTERNAL:0x1", [node("return", "0xc000", "RETURN")]),
+    );
+    const result = await traceNativeValues(port, { procedure: "0xc000" });
+    if (!result.ok) throw result.error;
+    expect(nativeValueTraceSchema.parse(result.value)).toMatchObject({
+      decompilations: 1,
+      edges: [],
+      traversal: { status: "complete" },
+      unknowns: [externalTargetUnknown],
+    });
+    expect(attempted).toEqual([["analyze_function", { procedure: "0xc000" }]]);
+  });
+
+  it("keeps an internal thunk whose model borrows its target's operations", async () => {
+    const { port, attempted } = thunkPort(
+      thunkDossier("0x2b8", [
+        node("copy", "0x2b8", "COPY"),
+        node("return", "0x2bc", "RETURN"),
+      ]),
+    );
+    const result = await traceNativeValues(port, { procedure: "0xc000" });
+    if (!result.ok) throw result.error;
+    expect(nativeValueTraceSchema.parse(result.value)).toMatchObject({
+      traversal: { status: "complete" },
+      unknowns: [],
+    });
+    expect(attempted).toEqual([["analyze_function", { procedure: "0xc000" }]]);
+  });
+
+  it("keeps a thunk whose resolved call reaches its target and traverses it", async () => {
+    const graph = staticValueGraph(
+      { "0x2000": { operations: [node("return", "0x2000", "RETURN")] } },
+      { "0xc000": [{ destination: "0x2000", status: "direct" }] },
+    );
+    const thunk = thunkDossier("0x2000", [
+      node("call", "0xc000", "CALL"),
+      node("return", "0xc004", "RETURN"),
+    ]);
+    const port: AnalysisOperationPort = {
+      execute: (operation, parameters) =>
+        operation === "analyze_function" && parameters.procedure === "0xc000"
+          ? Promise.resolve(
+              ok(createAnalysisExecution(thunk, provider, { subject })),
+            )
+          : graph.port.execute(operation, parameters),
+    };
+    const result = await traceNativeValues(port, { procedure: "0xc000" });
+    if (!result.ok) throw result.error;
+    const parsed = nativeValueTraceSchema.parse(result.value);
+    expect(parsed).toMatchObject({
+      decompilations: 2,
+      traversal: { status: "complete" },
+      edges: expect.arrayContaining([
+        expect.objectContaining({
+          source: "0xc000/call",
+          target: "0x2000",
+          kind: "call",
+          status: "direct",
+        }),
+      ]),
+    });
+    expect(parsed.unknowns.map(({ reason }) => reason)).not.toContainEqual(
+      expect.stringContaining("Thunk target"),
+    );
+    expect(graph.analyzed).toEqual(["0x2000"]);
+  });
+
+  it("reports the thunk target alongside a missing def-use model", async () => {
+    const { port } = thunkPort(
+      jsonValueSchema.parse({
+        ...functionDossierSchema.parse(thunkDossier("EXTERNAL:0x1", [])),
+        native_value_flow: null,
+      }),
+    );
+    const result = await traceNativeValues(port, { procedure: "0xc000" });
+    if (!result.ok) throw result.error;
+    expect(nativeValueTraceSchema.parse(result.value).unknowns).toEqual([
+      {
+        procedure: "0xc000",
+        address: null,
+        reason: "Provider has no native def-use model",
+      },
+      externalTargetUnknown,
+    ]);
+  });
+});
