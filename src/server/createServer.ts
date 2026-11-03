@@ -32,6 +32,7 @@ import { registerDesktopApplicationTool } from "./registerDesktopApplicationTool
 import { registerModelArtifactTools } from "./registerModelArtifactTools.js";
 import { registerGoTools } from "./registerGoTools.js";
 import { registerIl2cppTools } from "./registerIl2cppTools.js";
+import { registerUnityAddressablesTools } from "./registerUnityAddressablesTools.js";
 import { registerRustTools } from "./registerRustTools.js";
 import { registerPythonPycTool } from "./registerPythonPycTool.js";
 import { registerErlangTools } from "./registerErlangTools.js";
@@ -197,6 +198,7 @@ export const createServer = (
     modelArtifact,
     gpuCodeObjects,
     il2cppMetadata,
+    unityAddressables,
     peResources,
     nativeExports,
     devicetree,
@@ -542,6 +544,14 @@ export const createServer = (
       registerIl2cppTools(
         server,
         il2cppMetadata,
+        toolLogger,
+        recordEvidence,
+        analysisAdmission,
+        evidenceById,
+      );
+      registerUnityAddressablesTools(
+        server,
+        unityAddressables,
         toolLogger,
         recordEvidence,
         analysisAdmission,
