@@ -27,6 +27,11 @@ const eventsFor = (call: string) =>
     eventName,
   }));
 
+const eventsForSource = (source: string) =>
+  analyzeJavaScriptSemantics(source).eventOperations.map(
+    ({ kind, method, eventName }) => ({ kind, method, eventName }),
+  );
+
 it.each([
   ["a numeric listener", `e.on("x", 1)`],
   ["a string listener", `e.on("x", "fn")`],
@@ -65,6 +70,216 @@ it.each([
   expect(eventsFor(call)).toEqual([
     { kind: expect.any(String) as unknown as string, method, eventName: "x" },
   ]);
+});
+
+/**
+ * A listener method called without a listener argument passes `undefined` to
+ * Node's `checkListener`, which throws before anything is registered or
+ * removed. The argument position is empty, so no function can arrive there.
+ *
+ * Measured on Node 22.23.3:
+ *
+ *   emitter.on()                     -> THREW ERR_INVALID_ARG_TYPE
+ *   emitter.on("x")                  -> THREW ERR_INVALID_ARG_TYPE
+ *   emitter.once("x")                -> THREW ERR_INVALID_ARG_TYPE
+ *   emitter.addListener("x")         -> THREW ERR_INVALID_ARG_TYPE
+ *   emitter.prependListener("x")     -> THREW ERR_INVALID_ARG_TYPE
+ *   emitter.prependOnceListener("x") -> THREW ERR_INVALID_ARG_TYPE
+ *   emitter.removeListener("x")      -> THREW ERR_INVALID_ARG_TYPE
+ *   emitter.off("x") / emitter.off() -> THREW ERR_INVALID_ARG_TYPE
+ *
+ * A spread still reaches the position through the call, so it is untouched.
+ */
+it.each([
+  ["a missing listener", `e.on("x")`],
+  ["a missing once listener", `e.once("x")`],
+  ["a missing addListener listener", `e.addListener("x")`],
+  ["a missing prependListener listener", `e.prependListener("x")`],
+  ["a missing prependOnceListener listener", `e.prependOnceListener("x")`],
+  ["a missing removeListener listener", `e.removeListener("x")`],
+  ["a missing off listener", `e.off("x")`],
+  ["no arguments at all", `e.on()`],
+  ["no off arguments at all", `e.off()`],
+] as const)("emits no event operation for %s", (_name, call) => {
+  expect(eventsFor(call)).toEqual([]);
+});
+
+it("keeps the event operation for a spread call with no fixed listener", () => {
+  expect(eventsFor(`e.on(...pairs)`)).toEqual([
+    {
+      kind: expect.any(String) as unknown as string,
+      method: "on",
+      eventName: null,
+    },
+  ]);
+});
+
+it.each([
+  [
+    "a named import",
+    `import { EventEmitter } from "node:events";`,
+    "EventEmitter",
+  ],
+  ["a default import", `import EE from "node:events";`, "EE"],
+  [
+    "a destructured require",
+    `const { EventEmitter } = require("events");`,
+    "EventEmitter",
+  ],
+  [
+    "a member require",
+    `const events = require("node:events");`,
+    "events.EventEmitter",
+  ],
+] as const)(
+  "drops a missing listener on a receiver built from %s",
+  (_name, header, constructor) => {
+    expect(
+      eventsForSource(`${header}
+const e = new ${constructor}();
+e.on("x");`),
+    ).toEqual([]);
+  },
+);
+
+it("keeps a missing listener when the receiver was reassigned", () => {
+  expect(
+    eventsForSource(`import { EventEmitter } from "node:events";
+const e = new EventEmitter();
+e = other;
+e.on("x");`),
+  ).toContainEqual({ kind: "register", method: "on", eventName: "x" });
+});
+
+/**
+ * `checkListener` is Node's own contract. An EventEmitter-style receiver that
+ * this module does not construct from `events.EventEmitter` may define a
+ * one-argument form: Socket.IO's `socket.off("x")` removes every listener for
+ * the event, so the operation must survive as an unresolved candidate.
+ */
+it("keeps a one-argument removal on a receiver with no proven Node emitter", () => {
+  expect(
+    eventsForSource(`function g(socket) { socket.off("x"); }`),
+  ).toContainEqual({ kind: "remove", method: "off", eventName: "x" });
+});
+
+/**
+ * A subclass may default the listener position, which makes `bus.on("ready")`
+ * a real registration even though the module never proves Node's rejection.
+ * Measured on Node 22.23.3: this class stores `"ready"` and does not throw.
+ */
+it("keeps the registration of a subclass that defaults its listener", () => {
+  const events = eventsForSource(
+    `import { EventEmitter } from "node:events";
+class Bus extends EventEmitter {
+  on(name, fn = () => {}) { return super.on(name, fn); }
+}
+const bus = new Bus();
+bus.on("ready");`,
+  );
+  expect(events).toContainEqual({
+    kind: "register",
+    method: "on",
+    eventName: "ready",
+  });
+});
+
+/**
+ * A member write replaces the method the native contract belongs to. Measured
+ * on Node 22.23.3: `e.on = (name, fn = () => {}) => ...` stores `"ready"`, so
+ * `checkListener` never runs and the one-argument call is a real registration.
+ */
+it("keeps the registration of a receiver whose method was replaced", () => {
+  expect(
+    eventsForSource(`import { EventEmitter } from "node:events";
+const e = new EventEmitter();
+e.on = (name, fn = () => {}) => EventEmitter.prototype.on.call(e, name, fn);
+e.on("ready");`),
+  ).toContainEqual({ kind: "register", method: "on", eventName: "ready" });
+});
+
+/**
+ * Every instance shares the constructor's prototype, so replacing the method
+ * there replaces it for this receiver too.
+ */
+it("keeps the registration of a receiver whose prototype was replaced", () => {
+  expect(
+    eventsForSource(`import { EventEmitter } from "node:events";
+EventEmitter.prototype.on = function (name, fn = () => {}) { return this; };
+const e = new EventEmitter();
+e.on("ready");`),
+  ).toContainEqual({ kind: "register", method: "on", eventName: "ready" });
+});
+
+/**
+ * The proof is keyed on the selected method, so a write to an unrelated member
+ * must not weaken it: `tag` never answers `on`.
+ */
+it("still rejects a missing listener beside an unrelated member write", () => {
+  expect(
+    eventsForSource(`import { EventEmitter } from "node:events";
+const e = new EventEmitter();
+e.tag = 1;
+e.on("ready");`),
+  ).toEqual([]);
+});
+
+/**
+ * A namespace import constructs the class through a member expression, so the
+ * constructor has no binding of its own and the prototype write is recorded
+ * against the module instead. Measured on Node 22.22.2: rewriting `on` to
+ * delegate to the `addListener` captured before the rewrite stores `"ready"`
+ * for a one-argument call. Delegating to `this.addListener` instead overflows
+ * the stack, because Node defines `addListener` as the same function as `on`.
+ */
+it("keeps the registration of a receiver built from a namespace member", () => {
+  expect(
+    eventsForSource(`import * as events from "node:events";
+const original = events.EventEmitter.prototype.addListener;
+const e = new events.EventEmitter();
+events.EventEmitter.prototype.on = function (name, fn = () => {}) { return original.call(this, name, fn); };
+e.on("ready");`),
+  ).toContainEqual({ kind: "register", method: "on", eventName: "ready" });
+});
+
+/** A member require reaches the same class through the same member expression. */
+it("keeps the registration of a receiver built from a member require", () => {
+  expect(
+    eventsForSource(`const events = require("node:events");
+const original = events.EventEmitter.prototype.addListener;
+const e = new events.EventEmitter();
+events.EventEmitter.prototype.on = function (name, fn = () => {}) { return original.call(this, name, fn); };
+e.on("ready");`),
+  ).toContainEqual({ kind: "register", method: "on", eventName: "ready" });
+});
+
+/**
+ * Handing the instance to another call lets that call replace the method.
+ * Measured on Node 22.22.2: `configure(e)` replaces `on` with a form that
+ * defaults the listener, so `e.on("ready")` registers.
+ */
+it("keeps the registration of a receiver that was passed to a call", () => {
+  expect(
+    eventsForSource(`import { EventEmitter } from "node:events";
+const e = new EventEmitter();
+function configure(target) {
+  target.on = (name, fn = () => {}) => target.addListener(name, fn);
+}
+configure(e);
+e.on("ready");`),
+  ).toContainEqual({ kind: "register", method: "on", eventName: "ready" });
+});
+
+/**
+ * The added checks must not withdraw the proof from an untouched namespace
+ * receiver, or the guard would never apply to the member-expression forms.
+ */
+it("still rejects a missing listener on an untouched namespace receiver", () => {
+  expect(
+    eventsForSource(`import * as events from "node:events";
+const e = new events.EventEmitter();
+e.on("ready");`),
+  ).toEqual([]);
 });
 
 /**
