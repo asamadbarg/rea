@@ -21,13 +21,21 @@ export const resolveXrefsAddress = async (
   return named.value !== null
     ? ok(named.value)
     : err(
-        new AnalysisInputError("xrefs", undefined, [
+        new AnalysisInputError(
+          "xrefs",
           {
-            path: ["address"],
-            reason: "invalid_value",
-            message: `Unknown analyzed symbol name ${JSON.stringify(selector)}. Use an exact analyzed name or a hexadecimal address.`,
+            conformsToInputContract: true,
+            remediationAction:
+              "If available, inspect analyzed names with MCP list_names or target exports with CLI inspect-macho (Mach-O) or inspect-native-exports (PE/ELF). Exports may omit local symbols and use different address coordinates; resolve the name or verify the address in the selected provider before using xrefs. For functions, CLI search --kind procedures can find analyzed addresses.",
           },
-        ]),
+          [
+            {
+              path: ["address"],
+              reason: "invalid_value",
+              message: `Unknown analyzed symbol name ${JSON.stringify(selector)}. Use an exact analyzed name or a hexadecimal address.`,
+            },
+          ],
+        ),
       );
 };
 
@@ -90,12 +98,20 @@ export const resolveXrefsName = async (
   const [address] = addresses;
   if (addresses.size <= 1) return ok(address ?? null);
   return err(
-    new AnalysisInputError(operation, undefined, [
+    new AnalysisInputError(
+      operation,
       {
-        path: [operation === "xrefs" ? "address" : "name"],
-        reason: "invalid_value",
-        message: `Analyzed symbol name ${JSON.stringify(selector)} is ambiguous at ${[...addresses].sort().join(", ")}. Select an exact address.`,
+        conformsToInputContract: true,
+        remediationAction:
+          "Select an exact address from the candidates and call xrefs with that address.",
       },
-    ]),
+      [
+        {
+          path: [operation === "xrefs" ? "address" : "name"],
+          reason: "invalid_value",
+          message: `Analyzed symbol name ${JSON.stringify(selector)} is ambiguous at ${[...addresses].sort().join(", ")}. Select an exact address.`,
+        },
+      ],
+    ),
   );
 };
