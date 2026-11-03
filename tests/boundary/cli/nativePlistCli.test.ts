@@ -6,12 +6,41 @@ import { promisify } from "node:util";
 import { describe, expect } from "vitest";
 
 import { thinMach } from "../../../src/domain/binaryTarget.fixture.js";
+import { decodeOpenStepPropertyList } from "../../../src/domain/propertyListOpenStep.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
 
 describe.skipIf(process.platform !== "darwin")(
   "native plist CLI selection",
   () => {
+    cliTest(
+      "matches plutil for defined NeXTSTEP octets",
+      async ({ processes }) => {
+        const root = await createTestTempDirectory("rea-openstep-octal-");
+        const path = join(root, "Octal.plist");
+        const quotedByte = (byte: number) =>
+          '"\\' + byte.toString(8).padStart(3, "0") + '"';
+        // Native releases disagree on undefined octets 0xfe and 0xff.
+        // The shared parser's refusal of those values is covered by its own tests.
+        const bytes = Array.from({ length: 254 }, (_, byte) =>
+          quotedByte(byte),
+        );
+        const source = "(" + bytes.join(",") + ")";
+        await writeFile(path, source);
+        const converted = await processes.run("/usr/bin/plutil", [
+          "-convert",
+          "json",
+          "-o",
+          "-",
+          path,
+        ]);
+        expect(converted.exitCode, converted.stderr).toBe(0);
+        const expected: unknown = JSON.parse(converted.stdout);
+        expect(expected).toHaveLength(bytes.length);
+        expect(decodeOpenStepPropertyList(source)).toEqual(expected);
+      },
+    );
+
     // Targets are app-relative: the bundle, its program file, or a plist file.
     cliTest.for([
       ["default", "", undefined, "default"],
